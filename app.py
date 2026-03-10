@@ -8,74 +8,80 @@ import io
 # ---------------------------------------------------------
 # ⚙️ 페이지 설정
 # ---------------------------------------------------------
-st.set_page_config(page_title="K-Value Oracle V1.3", page_icon="⚖️", layout="wide")
+st.set_page_config(page_title="K-Value Oracle V1.4", page_icon="⚖️", layout="wide")
 
-st.title("⚖️ The Quantum Oracle: 한국형 가치투자 분석기 V1.3")
-st.markdown("여의도(네이버 금융)의 재무 데이터를 **동적 크롤링 엔진**으로 오차 없이 긁어와 분석합니다.")
+st.title("⚖️ The Quantum Oracle: 한국형 가치투자 분석기 V1.4")
+st.markdown("여의도(네이버 금융)의 재무 데이터를 **4단계 정밀 크롤링 엔진**으로 오차 없이 긁어와 분석합니다.")
 
 # ---------------------------------------------------------
-# ⚙️ 사용자 입력 및 네이버 금융 크롤링 엔진
+# ⚙️ 사용자 입력
 # ---------------------------------------------------------
 ticker_input = st.text_input("분석할 한국 주식 종목코드 6자리를 입력하세요 (예: 005930)", "005930")
 WACC = st.slider("요구수익률(WACC) 설정 (%) - 통상 8~10% 사용", min_value=5.0, max_value=15.0, value=8.0, step=0.5) / 100
 
+# ---------------------------------------------------------
+# 🕷️ 4단계 정밀 크롤링 엔진
+# ---------------------------------------------------------
 def get_naver_financials(code):
-    """네이버 금융에서 실시간 주가 및 기업실적분석(EPS, BPS, ROE) 데이터를 동적으로 안전하게 추출합니다."""
     url = f"https://finance.naver.com/item/main.naver?code={code}"
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
     }
     
     try:
+        # [Step 1] 페이지 요청 및 인코딩 강제 고정
         res = requests.get(url, headers=headers, timeout=5)
-        res.raise_for_status() # 웹페이지 접속 불량 시 에러 발생
+        res.raise_for_status() 
+        res.encoding = 'euc-kr' # 🌟 네이버 금융 한글 깨짐 및 파싱 오류 방지 핵심
         
         soup = BeautifulSoup(res.text, 'html.parser')
         
-        # 1. 기업명 및 현재가 파싱
-        name_tag = soup.select_once('.wrap_company h2 a')
-        price_tag = soup.select_once('.no_today .blind')
+        # [Step 2] 기업명 및 현재가 정밀 추출 (None 에러 방어)
+        name_area = soup.find('div', {'class': 'wrap_company'})
+        if name_area is None: return {'error': '[크롤링 1단계] 기업명 영역을 찾을 수 없습니다.'}
         
-        if not name_tag or not price_tag:
-            return {'error': '기업명 또는 현재가를 찾을 수 없습니다. 종목코드를 확인하세요.'}
-            
-        name = name_tag.text
+        name_tag = name_area.find('h2')
+        if name_tag is None: return {'error': '[크롤링 1단계] 기업명 텍스트를 찾을 수 없습니다.'}
+        name = name_tag.find('a').text
+        
+        price_area = soup.find('p', {'class': 'no_today'})
+        if price_area is None: return {'error': '[크롤링 1단계] 현재가 영역을 찾을 수 없습니다.'}
+        
+        price_tag = price_area.find('span', {'class': 'blind'})
+        if price_tag is None: return {'error': '[크롤링 1단계] 현재가 숫자를 찾을 수 없습니다.'}
         current_price = float(price_tag.text.replace(',', ''))
         
-        # 2. 기업실적분석 표 동적 파싱 (Pandas 최신버전 대응 io.StringIO 적용)
-        dfs = pd.read_html(io.StringIO(res.text), encoding='euc-kr')
+        # [Step 3] 기업실적분석 표(Table) 영역만 도려내기
+        cop_analysis = soup.find('div', {'class': 'cop_analysis'})
+        if cop_analysis is None: return {'error': '[크롤링 2단계] 기업실적분석 표를 찾을 수 없습니다.'}
         
-        target_df = None
-        # 몇 번째 표인지 상관없이 '매출액' 항목이 있는 표를 스스로 찾아냅니다.
-        for df in dfs:
-            if df.iloc[:, 0].astype(str).str.contains('매출액').any():
-                target_df = df
-                break
-                
-        if target_df is None:
-            return {'error': '재무제표(기업실적분석) 표를 찾을 수 없습니다.'}
+        table_html = str(cop_analysis.find('table'))
+        dfs = pd.read_html(io.StringIO(table_html))
+        
+        if not dfs: return {'error': '[크롤링 3단계] 추출한 표를 판다스로 읽어들이지 못했습니다.'}
+        df = dfs[0]
+        
+        # [Step 4] 다중 인덱스 붕괴 및 목표 데이터 스캔
+        df.columns = range(df.shape[1]) # 복잡한 헤더를 0,1,2.. 로 단순화
+        idx_col = df[0].astype(str) # 첫 번째 열(항목 이름) 추출
+        
+        # 대소문자 무시(case=False)하고 키워드가 포함된 행(Row) 탐색
+        eps_row = df[idx_col.str.contains('EPS', na=False, case=False)]
+        bps_row = df[idx_col.str.contains('BPS', na=False, case=False)]
+        roe_row = df[idx_col.str.contains('ROE', na=False, case=False)]
+        
+        if eps_row.empty or bps_row.empty or roe_row.empty:
+            return {'error': '[크롤링 4단계] 표 내부에 EPS, BPS, ROE 중 누락된 항목이 있습니다.'}
             
-        # 3. 항목 이름이 포함된 행 인덱스 찾기 (대소문자 무시)
-        idx_col = target_df.iloc[:, 0].astype(str)
-        eps_idx = idx_col[idx_col.str.contains('EPS', case=False)].index
-        bps_idx = idx_col[idx_col.str.contains('BPS', case=False)].index
-        roe_idx = idx_col[idx_col.str.contains('ROE', case=False)].index
+        # 연간 실적은 통상 1~4열에 위치. 숫자로 강제 변환 후 NaN 제거
+        eps_vals = pd.to_numeric(eps_row.iloc[0, 1:5], errors='coerce').dropna()
+        bps_vals = pd.to_numeric(bps_row.iloc[0, 1:5], errors='coerce').dropna()
+        roe_vals = pd.to_numeric(roe_row.iloc[0, 1:5], errors='coerce').dropna()
         
-        if len(eps_idx) == 0 or len(bps_idx) == 0 or len(roe_idx) == 0:
-            return {'error': 'EPS, BPS, ROE 중 누락된 항목이 있어 계산이 불가능합니다.'}
-            
-        # 4. 최근 연간 실적 데이터 추출 (컬럼 1~4)
-        eps_vals = pd.to_numeric(target_df.iloc[eps_idx[0], 1:5], errors='coerce').dropna()
-        bps_vals = pd.to_numeric(target_df.iloc[bps_idx[0], 1:5], errors='coerce').dropna()
-        roe_vals = pd.to_numeric(target_df.iloc[roe_idx[0], 1:5], errors='coerce').dropna()
-        
-        # 최근 값 확정
+        # 가장 최근 연도 값 추출
         eps_latest = eps_vals.iloc[-1] if not eps_vals.empty else 0
         bps_latest = bps_vals.iloc[-1] if not bps_vals.empty else 0
         roe_latest = (roe_vals.iloc[-1] / 100.0) if not roe_vals.empty else 0
-        
-        eps_history = eps_vals.values
         
         return {
             'name': name,
@@ -83,24 +89,26 @@ def get_naver_financials(code):
             'eps': eps_latest,
             'bps': bps_latest,
             'roe': roe_latest,
-            'eps_history': eps_history
+            'eps_history': eps_vals.values
         }
         
     except Exception as e:
-        return {'error': f'시스템 오류 발생: {str(e)}'}
+        return {'error': f'[시스템 치명적 오류] {str(e)}'}
 
+# ---------------------------------------------------------
+# 🚀 메인 실행 로직
+# ---------------------------------------------------------
 if st.button("🔍 내재 가치 분석 실행"):
     if len(ticker_input) != 6 or not ticker_input.isdigit():
         st.warning("⚠️ 종목코드는 숫자 6자리여야 합니다. (예: 005930)")
         st.stop()
         
-    with st.spinner(f"[{ticker_input}] 네이버 금융 재무 데이터 추출 및 4대 엔진 가동 중..."):
+    with st.spinner(f"[{ticker_input}] 정밀 크롤링 엔진 가동 중..."):
         fin_data = get_naver_financials(ticker_input)
         
-        # 에러 처리 로직 강화
-        if fin_data is None or 'error' in fin_data:
-            error_msg = fin_data['error'] if fin_data else '알 수 없는 크롤링 오류'
-            st.error(f"❌ 데이터 추출 실패: {error_msg}")
+        # 크롤링 중 발생한 에러를 상세하게 화면에 출력
+        if 'error' in fin_data:
+            st.error(f"❌ 데이터 추출 실패: {fin_data['error']}")
             st.stop()
             
         current_price = fin_data['price']
@@ -110,23 +118,16 @@ if st.button("🔍 내재 가치 분석 실행"):
         eps_history = fin_data['eps_history']
         
         if eps <= 0 or bps <= 0:
-            st.error(f"❌ {fin_data['name']}은(는) 현재 적자 기업이거나 자본잠식 상태입니다. (EPS: {eps:,.0f}, BPS: {bps:,.0f}) 보수적 모델은 흑자 기업에만 적용됩니다.")
+            st.error(f"❌ {fin_data['name']}은(는) 현재 적자 기업이거나 자본잠식 상태입니다. (EPS: {eps:,.0f}, BPS: {bps:,.0f})\n보수적 가치평가 모델은 흑자 기업에만 적용됩니다.")
             st.stop()
 
         # ---------------------------------------------------------
-        # 🧠 4대 보수적 가치평가 엔진
+        # 🧠 4대 보수적 가치평가 엔진 산출
         # ---------------------------------------------------------
-        
-        # 1. 벤저민 그레이엄 공식
         graham_value = np.sqrt(22.5 * eps * bps)
-        
-        # 2. 수익력 가치 (EPV)
         epv_value = eps / WACC
-        
-        # 3. 잔여이익모델 (RIM)
         rim_value = bps + (bps * (roe - WACC) / WACC) if roe > WACC else bps
 
-        # 4. 통계적 보수형 DCF (EPS 성장률 기반 대리 모델)
         dcf_value = 0
         if len(eps_history) >= 3 and all(e > 0 for e in eps_history):
             growth_rates = np.diff(eps_history) / eps_history[:-1]
@@ -134,7 +135,7 @@ if st.button("🔍 내재 가치 분석 실행"):
             sigma = np.std(growth_rates)
             
             conservative_g = mu - (0.52 * sigma)
-            g = max(0.02, min(conservative_g, 0.15)) # 최소 2%, 최대 15% 성장 캡
+            g = max(0.02, min(conservative_g, 0.15)) 
             
             present_value = 0
             for year in range(1, 6):
@@ -145,10 +146,10 @@ if st.button("🔍 내재 가치 분석 실행"):
             present_value += tv / ((1 + WACC) ** 5)
             dcf_value = present_value
         else:
-            dcf_value = epv_value # 과거 적자 기록이 있으면 EPV로 대체
+            dcf_value = epv_value
 
         # ---------------------------------------------------------
-        # 📊 결과 종합 및 판별
+        # 📊 결과 렌더링
         # ---------------------------------------------------------
         models = {'Graham': graham_value, 'EPV': epv_value, 'RIM': rim_value, 'Stat-DCF': dcf_value}
         strict_fair_value = min(models.values())
