@@ -8,9 +8,9 @@ import io
 # ---------------------------------------------------------
 # ⚙️ 페이지 설정
 # ---------------------------------------------------------
-st.set_page_config(page_title="K-Value Oracle V1.6", page_icon="⚖️", layout="wide")
+st.set_page_config(page_title="K-Value Oracle V1.7", page_icon="⚖️", layout="wide")
 
-st.title("⚖️ The Quantum Oracle: 한국형 가치투자 분석기 V1.6")
+st.title("⚖️ The Quantum Oracle: 한국형 가치투자 분석기 V1.7")
 st.markdown("여의도(네이버 금융)의 재무 데이터를 **4단계 정밀 크롤링 엔진**으로 오차 없이 긁어와 분석합니다.")
 
 # ---------------------------------------------------------
@@ -147,7 +147,8 @@ if st.button("🔍 내재 가치 분석 실행"):
         # ---------------------------------------------------------
         # 📊 결과 렌더링
         # ---------------------------------------------------------
-        models = {'Graham': Graham_value, 'EPV': epv_value, 'RIM': rim_value, 'Stat-DCF': dcf_value}
+        # 🌟 버그 수정 완료 (graham_value 소문자 호출)
+        models = {'Graham': graham_value, 'EPV': epv_value, 'RIM': rim_value, 'Stat-DCF': dcf_value}
         strict_fair_value = min(models.values())
         
         st.subheader(f"📊 {fin_data['name']} ({ticker_input}) 가치 평가 결과")
